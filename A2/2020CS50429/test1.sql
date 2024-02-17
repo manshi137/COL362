@@ -205,15 +205,21 @@ insert into courses values('CSE110', 'Intro to CSE10', 'Intro to CSE10', 4, 'CSE
 insert into courses values('CSE111', 'Intro to CSE11', 'Intro to CSE11', 4, 'CSE');
 insert into courses values('CSE112', 'Intro to CSE12', 'Intro to CSE12', 4, 'CSE');
 insert into courses values('CSE113', 'Intro to CSE13', 'Intro to CSE13', 4, 'CSE');
+insert into courses values('EEE110', 'Intro to EEE10', 'Intro to EEE10', 4, 'EEE');
 
 insert into course_offers values('CSE110', '2020-2021', 1, 'prof1', 100, 0);
 insert into course_offers values('CSE111', '2020-2021', 1, 'prof1', 100, 0);
 insert into course_offers values('CSE112', '2020-2021', 1, 'prof1', 100, 0);
-
+insert into course_offers values('EEE110', '2020-2021', 1, 'prof5', 100, 0);
 -- insert into course_offers values('CSE113', '2020-2021', 1, 'prof1', 100, 0);
 -- select * from course_offers;
+-- ?????????????
 -- update department set dept_id = 'ece' where dept_id = 'EEE';
-
+select * from department;
+select * from student;
+select * from valid_entry;
+select * from courses;
+select * from professor;
 -- delete from department where dept_id = 'ece';
 
 insert into department values('ccc', NULL);

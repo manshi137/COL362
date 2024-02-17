@@ -258,8 +258,8 @@ begin
         elsif avg_grade is NULL or avg_grade <= 8.5 then
                 raise exception 'Low Grade';
         else
-            new.student_id := substring(old.student_id from 1 for 4) || new.dept_id ||  current_seq_number;
-            -- new.student_id := substring(old.student_id from 1 for 4) || new.dept_id ||  lpad(SELECT CAST(current_seq_number AS VARCHAR) AS string_value, 3, 0);
+            -- new.student_id := substring(old.student_id from 1 for 4) || new.dept_id ||  current_seq_number;
+            new.student_id := substring(old.student_id from 1 for 4) || new.dept_id ||  lpad(current_seq_number::TEXT, 3, '0');
             update valid_entry set seq_number = current_seq_number + 1 where entry_year = entry_yr and dept_id = new.dept_id;
             update student_courses set student_id = new.student_id where student_id = old.student_id;
 
