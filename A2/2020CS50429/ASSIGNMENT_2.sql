@@ -75,7 +75,7 @@ create table if not exists course_offers(
 -- table 5
 -- drop table if exists student_courses;
 create table if not exists student_courses(
-    student_id CHAR(11) REFERENCES student(student_id),
+    student_id CHAR(11) ,
     course_id CHAR(6) ,
     session VARCHAR(9) ,
     semester INTEGER,
@@ -83,6 +83,8 @@ create table if not exists student_courses(
     FOREIGN KEY(course_id, session, semester) REFERENCES course_offers(course_id, session, semester),
     CONSTRAINT student_courses_ck CHECK (grade >= 0 AND grade <= 10)
 );
+
+alter table student_courses add constraint fk_student_id FOREIGN KEY (student_id) REFERENCES student(student_id) ON UPDATE CASCADE;
 -- table 8
 drop table if exists valid_entry;
 create table if not exists valid_entry(
@@ -237,6 +239,18 @@ begin
     select cast(substring(old.student_id from 1 for 4) as integer) into entry_yr;
 
     if old.dept_id <> new.dept_id then
+        alter table student_courses disable trigger all;
+        -- alter table student disable trigger all;
+        -- alter table student_dept_change disable trigger all;
+        -- alter table valid_entry disable trigger all;
+        -- alter table student_courses disable trigger all;
+        -- alter table department disable trigger all;
+        -- alter table courses disable trigger all;
+        -- alter table professor disable trigger all;
+        -- alter table course_offers disable trigger all;
+        -- alter table valid_entry disable trigger all;
+        -- alter table student_dept_change disable trigger all;
+
         if exists (select * from student_dept_change where (new_student_id= old.student_id)) then
             raise exception 'Department can be changed only once';
         elsif entry_yr < 2022 then
@@ -244,15 +258,15 @@ begin
         elsif avg_grade is NULL or avg_grade <= 8.5 then
                 raise exception 'Low Grade';
         else
-            alter table student drop constraint fk_dept_id; 
             new.student_id := substring(old.student_id from 1 for 4) || new.dept_id ||  current_seq_number;
-            update valid_entry set seq_number = seq_number + 1 where entry_year = substring(old.student_id from 1 for 4) and dept_id =new.dept_id;
-
-            update student set student_id = new.student_id where student_id = old.student_id;
-            update student set email_id = new.student_id || '@' || new.dept_id || '.iitd.ac.in' where student_id = old.student_id; 
+            -- new.student_id := substring(old.student_id from 1 for 4) || new.dept_id ||  lpad(SELECT CAST(current_seq_number AS VARCHAR) AS string_value, 3, 0);
+            update valid_entry set seq_number = current_seq_number + 1 where entry_year = entry_yr and dept_id = new.dept_id;
+            update student_courses set student_id = new.student_id where student_id = old.student_id;
 
             insert into student_dept_change values(old.student_id, old.dept_id, new.student_id, new.dept_id);
-            alter table student add constraint fk_dept_id FOREIGN KEY (dept_id) REFERENCES department(dept_id) ON UPDATE CASCADE;
+
+            new.email_id = new.student_id || '@' || new.dept_id || '.iitd.ac.in';
+        
             return new;
         end if;
     else
@@ -267,6 +281,30 @@ before update on student
 for each row
 execute function log_student_dept_change();
 
+create or replace function after_update_student()
+returns trigger as $$
+begin
+    if old.dept_id <> new.dept_id then
+    alter table student_courses enable trigger all;
+    -- alter table student enable trigger all;
+    -- alter table student_dept_change enable trigger all;
+    -- alter table valid_entry enable trigger all;
+    -- alter table student_courses enable trigger all;
+    -- alter table department enable trigger all;
+    -- alter table courses enable trigger all;
+    -- alter table professor enable trigger all;
+    -- alter table course_offers enable trigger all;
+    -- alter table valid_entry enable trigger all;
+    -- alter table student_dept_change enable trigger all;
+    end if;
+    return new;
+end;
+$$ language plpgsql;
+
+create or replace trigger after_update_student
+after update on student
+for each row
+execute function after_update_student();
 
 -- 2.2 Modifications to student courses table
 

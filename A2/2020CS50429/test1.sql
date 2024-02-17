@@ -226,6 +226,9 @@ delete from department where dept_id = 'ccc';
 
 
 select * from student_semester_summary;
-update student set dept_id='EEE' where student_id='2020CSE001'; 
--- update student set dept_id = 'CSE' where student_id = '2022EEE001';
-
+-- update student set dept_id='EEE' where student_id='2020CSE001';
+select * from student;
+update student set dept_id = 'CSE' where student_id = '2022EEE001';
+select * from student;
+-- update student_courses set grade = 5 where student_id = '2022EEE001' and course_id = 'CSE201';
+-- update student set dept_id='CSE' where student_id='2022EEE001';
