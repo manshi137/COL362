@@ -16,10 +16,13 @@ create table if not exists student(
     contact_number CHAR(10) NOT NULL UNIQUE,
     email_id VARCHAR(50) UNIQUE,
     tot_credits INTEGER NOT NULL,
-    dept_id CHAR(3) REFERENCES department(dept_id) ON UPDATE CASCADE,
+    dept_id CHAR(3),
     CONSTRAINT student_ck CHECK (tot_credits >= 0)
 );
-
+ALTER TABLE student ADD CONSTRAINT fk_dept_id FOREIGN KEY (dept_id)
+REFERENCES department(dept_id)
+-- DEFERRABLE INITIALLY DEFERRED
+ON UPDATE CASCADE;
 -- table 4
 -- drop table if exists courses;
 -- with tmp as 
@@ -214,50 +217,55 @@ EXECUTE FUNCTION validate_email_id();
 -- Also, you have to update the corresponding valid email id in the student table.
 -- 
 
--- drop table if exists student_dept_change;
--- create table if not exists student_dept_change(
---     old_student_id CHAR(11),
---     old_dept_id CHAR(3) REFERENCES department(dept_id),
---     new_student_id CHAR(11),
---     new_dept_id CHAR(3) REFERENCES department(dept_id)
--- );
+drop table if exists student_dept_change;
+create table if not exists student_dept_change(
+    old_student_id CHAR(11),
+    old_dept_id CHAR(3) REFERENCES department(dept_id),
+    new_student_id CHAR(11),
+    new_dept_id CHAR(3) REFERENCES department(dept_id)
+);
 -- -- ???????????????????????????????????????????
--- create or replace function log_student_dept_change() 
--- returns trigger as $$
--- DECLARE
---     avg_grade numeric;
---     current_seq_number integer;
--- begin
---     select avg(grade) into avg_grade from student_courses where student_id = old.student_id and grade >=5
---     group by student_id;
---     select seq_number into current_seq_number from valid_entry where entry_year = cast(substring(old.student_id from 1 for 4) as integer) and dept_id =new.dept_id;
---     if old.dept_id <> new.dept_id then
---         if exists (select * from student_dept_change where (new_student_id= old.student_id)) then
---             raise exception 'Department can be changed only once';
---         elsif old.entry_year < 2022 then
---             raise exception 'Entry year must be >= 2022';
---         else
---             if avg_grade is NULL or avg_grade <= 8.5 then
---                 raise exception 'Low Grade';
---             else
---                 new.student_id := substring(old.student_id from 1 for 4) || new.dept_id ||  current_seq_number;
---                 update valid_entry set seq_number = seq_number + 1 where entry_year = substring(old.student_id from 1 for 4) and dept_id =new.dept_id;
+create or replace function log_student_dept_change() 
+returns trigger as $$
+DECLARE
+    avg_grade numeric;
+    current_seq_number integer;
+    entry_yr integer;
+begin
+    select avg(grade) into avg_grade from student_courses where student_id = old.student_id and grade >=5 group by student_id;
+    select seq_number into current_seq_number from valid_entry where entry_year = cast(substring(old.student_id from 1 for 4) as integer) and dept_id =new.dept_id;
+    select cast(substring(old.student_id from 1 for 4) as integer) into entry_yr;
 
---                 update student set student_id = new.student_id where student_id = old.student_id;
---                 update student set email_id = new.student_id || '@' || new.dept_id || '.iitd.ac.in' where student_id = old.student_id; 
---                 insert into student_dept_change values(old.student_id, old.dept_id, new.student_id, new.dept_id);
---                 return new;
---             end if;
---         end if;
---     end if;
--- end;
--- $$ language plpgsql;
+    if old.dept_id <> new.dept_id then
+        if exists (select * from student_dept_change where (new_student_id= old.student_id)) then
+            raise exception 'Department can be changed only once';
+        elsif entry_yr < 2022 then
+            raise exception 'Entry year must be >= 2022';
+        elsif avg_grade is NULL or avg_grade <= 8.5 then
+                raise exception 'Low Grade';
+        else
+            alter table student drop constraint fk_dept_id; 
+            new.student_id := substring(old.student_id from 1 for 4) || new.dept_id ||  current_seq_number;
+            update valid_entry set seq_number = seq_number + 1 where entry_year = substring(old.student_id from 1 for 4) and dept_id =new.dept_id;
 
--- create or replace trigger log_student_dept_change
--- before update on student
--- for each row
--- execute function log_student_dept_change();
+            update student set student_id = new.student_id where student_id = old.student_id;
+            update student set email_id = new.student_id || '@' || new.dept_id || '.iitd.ac.in' where student_id = old.student_id; 
 
+            insert into student_dept_change values(old.student_id, old.dept_id, new.student_id, new.dept_id);
+            alter table student add constraint fk_dept_id FOREIGN KEY (dept_id) REFERENCES department(dept_id) ON UPDATE CASCADE;
+            return new;
+        end if;
+    else
+        return new;
+    end if;
+    
+end;
+$$ language plpgsql;
+
+create or replace trigger log_student_dept_change
+before update on student
+for each row
+execute function log_student_dept_change();
 
 
 -- 2.2 Modifications to student courses table
@@ -521,7 +529,9 @@ declare
     resign_yr integer;
 begin
     select count(*) into current_courses from course_offers
-    where professor_id = new.professor_id and session = new.session ;
+    where professor_id is not null and professor_id = new.professor_id and session = new.session 
+    -- and semester = new.semester
+    ;
 
     select resign_year into resign_yr from professor
     where professor_id = new.professor_id;
