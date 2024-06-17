@@ -1,0 +1,563 @@
+diff --git a/in/ac/iitd/src/main/java/rel/PProjectFilter.java b/in/ac/iitd/src/main/java/rel/PProjectFilter.java
+index cbc7fab..773e83b 100644
+--- a/in/ac/iitd/src/main/java/rel/PProjectFilter.java
++++ b/in/ac/iitd/src/main/java/rel/PProjectFilter.java
+@@ -5,11 +5,18 @@ import org.apache.calcite.plan.RelOptCluster;
+ import org.apache.calcite.plan.RelTraitSet;
+ import org.apache.calcite.rel.RelNode;
+ import org.apache.calcite.rel.core.Project;
++import org.apache.calcite.rel.core.Filter;
+ import org.apache.calcite.rel.type.RelDataType;
++import org.apache.calcite.rex.RexCall;
++import org.apache.calcite.rex.RexInputRef;
++import org.apache.calcite.rex.RexLiteral;
+ import org.apache.calcite.rex.RexNode;
++import org.apache.calcite.sql.SqlKind;
++import org.apache.calcite.util.NlsString;
+ 
+ import convention.PConvention;
+ 
++import java.math.BigDecimal;
+ import java.util.List;
+ 
+ /*
+@@ -18,7 +25,33 @@ import java.util.List;
+     * To implement PProjectFilter, you can extend either Project or Filter class.
+     * Define the constructor accordinly and override the methods as required.
+ */
+-public class PProjectFilter implements PRel {
++public class PProjectFilter extends Project implements PRel {
++
++    // private final RelNode child;
++    private final RexNode condition;
++    private final List<RexNode> projects;
++    private final RelDataType rowType;
++
++    public PProjectFilter(
++            RelOptCluster cluster,
++            RelTraitSet traits,
++            RelNode child,
++            RexNode condition,
++            List<RexNode> projects,
++            RelDataType rowType ) {
++        // super(cluster, traits, child, condition);
++        super(cluster,traits,child,projects,rowType);
++        // this.child = child;
++        this.condition  = condition;
++        this.projects = projects;
++        this.rowType = rowType;
++
++        // assert getConvention() instanceof PConvention;
++    }
++    @Override
++    public PProjectFilter copy(RelTraitSet traitSet, RelNode input, List<RexNode> projects, RelDataType rowType) {
++        return new PProjectFilter(getCluster(), traitSet, input, condition, projects, rowType);
++    }
+ 
+     public String toString() {
+         return "PProjectFilter";
+@@ -29,6 +62,11 @@ public class PProjectFilter implements PRel {
+     public boolean open(){
+         logger.trace("Opening PProjectFilter");
+         /* Write your code here */
++        // PRel child = (PRel)this.getInput();
++        PRel child = (PRel)this.input;
++        if(child.open()){
++            return true;
++        }
+         return false;
+     }
+ 
+@@ -37,22 +75,442 @@ public class PProjectFilter implements PRel {
+     public void close(){
+         logger.trace("Closing PProjectFilter");
+         /* Write your code here */
++        // PRel child = (PRel)this.getInput();
++        PRel child = (PRel) this.input;
++        ((PRel)child).close();
+         return;
+     }
+ 
+     // returns true if there is a next row, false otherwise
++    Object[] nextoutput = null;
+     @Override
+     public boolean hasNext(){
+         logger.trace("Checking if PProjectFilter has next");
+         /* Write your code here */
++        // PRel child = (PRel)this.getInput();
++        PRel child = (PRel) this.input;
++
++        Object[] row ;
++        if( ((PRel)child).hasNext()){
++            row = ((PRel)child).next();
++        }
++        else{
++            return false;
++        }
++
++        while(row != null ){
++            boolean cond = checkCondition(row, condition);
++            if(cond){
++                nextoutput = row;
++                return true;
++            }
++            if(child.hasNext()){
++                row = ((PRel)child).next();
++            }
++            else{
++                return false;
++            }
++        }
+         return false;
+     }
++    boolean checkCondition(Object[] row, RexNode condition){
++        // if condition is null 
++        if(condition == null){
++            return true;}
++        if( condition instanceof RexCall){ 
++            RexCall call = (RexCall)condition;
++            SqlKind kind = call.getKind();
++            if(kind == SqlKind.AND){
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if(!checkCondition(row, call.getOperands().get(i))){
++                        return false;
++                    }
++                }
++                return true;
++            }
++            else if(kind == SqlKind.OR){
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if(checkCondition(row, call.getOperands().get(i))){
++                        return true;
++                    }
++                }
++                return false;
++            }
++            else if(kind == SqlKind.NOT){
++                return !checkCondition(row, call.getOperands().get(0));
++            }
++            if(call.getOperands().get(0) instanceof RexInputRef && call.getOperands().get(1) instanceof RexInputRef){
++                int column1 = ((RexInputRef)call.getOperands().get(0)).getIndex();
++                int column2 = ((RexInputRef)call.getOperands().get(1)).getIndex();
++                // return compare(row[column1], row[column2]) <= 0;
++                if(kind == SqlKind.EQUALS){
++                    return compare(row[column1], row[column2]) == 0;
++                }
++                if(kind == SqlKind.GREATER_THAN){
++                    return compare(row[column1], row[column2]) > 0;
++                }
++                if(kind == SqlKind.GREATER_THAN_OR_EQUAL){
++                    return compare(row[column1], row[column2]) >= 0;
++                }
++                if(kind == SqlKind.LESS_THAN){
++                    return compare(row[column1], row[column2]) < 0;
++                }
++                if(kind == SqlKind.LESS_THAN_OR_EQUAL){
++                    return compare(row[column1], row[column2]) <= 0;
++                }
++                if(kind == SqlKind.NOT_EQUALS){
++                    return compare(row[column1], row[column2]) != 0;
++                }
++            } else if (call.getOperands().get(0) instanceof RexInputRef){
++                int column = ((RexInputRef)call.getOperands().get(0)).getIndex();
++                Object value = ((RexLiteral)call.getOperands().get(1)).getValue(); 
++                if(kind == SqlKind.EQUALS){
++                    return compare(row[column], value) == 0;
++                }
++                if(kind == SqlKind.GREATER_THAN){
++                    return compare(row[column], value) > 0;
++                }
++                if(kind == SqlKind.GREATER_THAN_OR_EQUAL){
++                    return compare(row[column], value) >= 0;
++                }
++                if(kind == SqlKind.LESS_THAN){
++                    return compare(row[column], value) < 0;
++                }
++                if(kind == SqlKind.LESS_THAN_OR_EQUAL){
++                    return compare(row[column], value) <= 0;
++                }
++                if(kind == SqlKind.NOT_EQUALS){
++                    return compare(value, row[column]) != 0;
++                }
++            }
++            else if( call.getOperands().get(1) instanceof RexInputRef){
++                int column = ((RexInputRef)call.getOperands().get(1)).getIndex();
++                Object value = ((RexLiteral)call.getOperands().get(0)).getValue(); 
++                if(kind == SqlKind.EQUALS){
++                    return compare(value, row[column]) == 0;
++                }
++                if(kind == SqlKind.GREATER_THAN){
++                    return compare(value, row[column]) > 0;
++                }
++                if(kind == SqlKind.GREATER_THAN_OR_EQUAL){
++                    return compare(value, row[column]) >= 0;
++                }
++                if(kind == SqlKind.LESS_THAN){
++                    return compare(value, row[column]) < 0;
++                }
++                if(kind == SqlKind.LESS_THAN_OR_EQUAL){
++                    return compare(value, row[column]) <= 0;
++                }
++                if(kind == SqlKind.NOT_EQUALS){
++                    return compare(value, row[column]) != 0;
++                }
++            } else if( call.getOperands().get(0) instanceof RexCall || call.getOperands().get(1) instanceof RexCall){
++                Object value1 = calculateRow(call.getOperands().get(0), row);
++                Object value2 = calculateRow(call.getOperands().get(1), row);
++                if(kind == SqlKind.EQUALS){
++                    return compare(value1, value2) == 0;
++                }
++                if(kind == SqlKind.GREATER_THAN){
++                    return compare(value1, value2) > 0;
++                }
++                if(kind == SqlKind.GREATER_THAN_OR_EQUAL){
++                    return compare(value1, value2) >= 0;
++                }
++                if(kind == SqlKind.LESS_THAN){
++                    return compare(value1, value2) < 0;
++                }
++                if(kind == SqlKind.LESS_THAN_OR_EQUAL){
++                    return compare(value1, value2) <= 0;
++                }
++                if(kind == SqlKind.NOT_EQUALS){
++                    return compare(value1, value2) != 0;
++                }
++            }
++            else{ 
++                // System.out.println("type of operands" + call.getOperands().getClass());
++                // System.out.println(call);
++                System.out.println("Invalid type -------- compare function incomp");
++            }
++        
++            
++        }
++        return false;
++    }
++    Object calculateRow(RexNode project, Object[] inputrow){
++        //check if projects is an expression
++        if(project instanceof org.apache.calcite.rex.RexCall){
++            // get operator 
++            org.apache.calcite.rex.RexCall call = (org.apache.calcite.rex.RexCall)project;
++            if(call.getKind() == org.apache.calcite.sql.SqlKind.PLUS){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).add( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.TIMES){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                // System.out.println(left.getClass() + " " + right.getClass());
++                return ((BigDecimal)left).multiply( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.MINUS){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).subtract( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.DIVIDE){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).divide( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.EQUALS){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).equals( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.GREATER_THAN){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) > 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.LESS_THAN){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) < 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.GREATER_THAN_OR_EQUAL){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) >= 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.LESS_THAN_OR_EQUAL){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) <= 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.AND){
++                // System.out.println("projects is an expression");
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if(!(boolean)calculateRow(call.getOperands().get(i), inputrow)){
++                        return false;
++                    }
++                }
++                return true;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.OR){
++                // System.out.println("projects is an expression");
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if((boolean)calculateRow(call.getOperands().get(i), inputrow)){
++                        return true;
++                    }
++                }
++                return false;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.NOT){
++                // System.out.println("projects is an expression");
++                return !((boolean)calculateRow(call.getOperands().get(0), inputrow));
++            }
++            else{
++                // System.out.println("projects is an expression");
++                // System.out.println("operator" + call.getKind());
++                return null;
++            }
++        }
++        else if(project instanceof org.apache.calcite.rex.RexInputRef){
++            // System.out.println("projects is an input ref");
++            int index = ((org.apache.calcite.rex.RexInputRef)project).getIndex();
++            if(inputrow[index] instanceof Integer  ){
++                BigDecimal bd = new BigDecimal((int)inputrow[index]);
++                return bd;
++            }
++            else if(inputrow[index] instanceof Double){
++                BigDecimal bd = new BigDecimal((double)inputrow[index]);
++                return bd;
++            }
++            return inputrow[index];
++        }
++        else if(project instanceof org.apache.calcite.rex.RexLiteral){
++            // System.out.println("projects is a literal");
++            Object value = ((org.apache.calcite.rex.RexLiteral)project).getValue();
++            return value;
++        }
++        else{
++            System.out.println("project type unknown -------" + project.getClass());
++            return null;
++        }
++    }
++    public int compare(Object val1, Object val2){
++        /* Write your code here */
++        // System.out.println("compare function");
++        BigDecimal bd1 = null, bd2= null;
++        NlsString ns1 = null, ns2= null;
++        if(val1 instanceof Integer ){
++            bd1 = new BigDecimal((int)val1);
++        }
++        else if(val1 instanceof Double){
++            bd1 = new BigDecimal((double)val1);
++        }
++        else if(val1 instanceof BigDecimal){
++            bd1 = (BigDecimal)val1;
++        }
++
++        if(val2 instanceof Integer){
++            bd2 = new BigDecimal((int)val2);
++        }
++        else if(val2 instanceof Double){
++            bd2 = new BigDecimal((double)val2);
++        }
++        else if(val2 instanceof BigDecimal){
++            bd2 = (BigDecimal)val2;
++        }
++        if(bd1 != null && bd2 != null){
++            return bd1.compareTo(bd2);
++        }
++
++        if(val1 instanceof NlsString){
++            ns1 = (NlsString)val1;
++        }
++        else if(val1 instanceof String){
++            ns1 = new NlsString((String)val1, null, null);
++        }
++
++        if(val2 instanceof NlsString){
++            ns2 = (NlsString)val2;
++        }
++        else if(val2 instanceof String){
++            ns2 = new NlsString((String)val2, null, null);
++        }
++
++        if(ns1 != null && ns2 != null){
++            return ns1.compareTo(ns2);
++        }
++       
++        System.out.println("Invalid type -------- compare function incomp");
++        return 0;
++    }
++    
+ 
+     // returns the next row
+     @Override
+     public Object[] next(){
+         logger.trace("Getting next row from PProjectFilter");
+         /* Write your code here */
+-        return null;
++        Object[] inputrow = nextoutput;
++
++        Object[] outputrow = new Object[projects.size()];
++        for(int i = 0; i < projects.size(); i++){
++            outputrow[i] = calculateRow2(projects.get(i), inputrow);
++        }
++        return outputrow;
+     }
++
++    Object calculateRow2(RexNode project, Object[] inputrow){
++        //check if projects is an expression
++        if(project instanceof org.apache.calcite.rex.RexCall){
++            // get operator 
++            org.apache.calcite.rex.RexCall call = (org.apache.calcite.rex.RexCall)project;
++            if(call.getKind() == org.apache.calcite.sql.SqlKind.PLUS){
++                Object left = calculateRow2(call.getOperands().get(0), inputrow);
++                Object right = calculateRow2(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).add( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.TIMES){
++                Object left = calculateRow2(call.getOperands().get(0), inputrow);
++                Object right = calculateRow2(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).multiply( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.MINUS){
++                Object left = calculateRow2(call.getOperands().get(0), inputrow);
++                Object right = calculateRow2(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).subtract( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.DIVIDE){
++                Object left = calculateRow2(call.getOperands().get(0), inputrow);
++                Object right = calculateRow2(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).divide( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.EQUALS){
++                Object left = calculateRow2(call.getOperands().get(0), inputrow);
++                Object right = calculateRow2(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).equals( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.GREATER_THAN){
++                Object left = calculateRow2(call.getOperands().get(0), inputrow);
++                Object right = calculateRow2(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) > 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.LESS_THAN){
++                Object left = calculateRow2(call.getOperands().get(0), inputrow);
++                Object right = calculateRow2(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) < 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.GREATER_THAN_OR_EQUAL){
++                Object left = calculateRow2(call.getOperands().get(0), inputrow);
++                Object right = calculateRow2(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) >= 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.LESS_THAN_OR_EQUAL){
++                Object left = calculateRow2(call.getOperands().get(0), inputrow);
++                Object right = calculateRow2(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) <= 0;
++            }
++            // else if(call.getKind() == org.apache.calcite.sql.SqlKind.NOT_EQUALS){
++            //     System.out.println("projects is an expression");
++            //     Object left = calculateRow2(call.getOperands().get(0), inputrow);
++            //     Object right = calculateRow2(call.getOperands().get(1), inputrow);
++            //     return !((BigDecimal)left).equals( (BigDecimal)right);
++            // }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.AND){
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if(!(boolean)calculateRow2(call.getOperands().get(i), inputrow)){
++                        return false;
++                    }
++                }
++                return true;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.OR){
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if((boolean)calculateRow2(call.getOperands().get(i), inputrow)){
++                        return true;
++                    }
++                }
++                return false;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.NOT){
++                return !((boolean)calculateRow2(call.getOperands().get(0), inputrow));
++            }
++            else{
++                return null;
++            }
++        }
++        else if(project instanceof org.apache.calcite.rex.RexInputRef){
++            int index = ((org.apache.calcite.rex.RexInputRef)project).getIndex();
++            if(inputrow[index] instanceof Integer  ){
++                BigDecimal bd = new BigDecimal((int)inputrow[index]);
++                return bd;
++            }
++            else if(inputrow[index] instanceof Double){
++                BigDecimal bd = new BigDecimal((double)inputrow[index]);
++                return bd;
++            }
++            return inputrow[index];
++        }
++        else if(project instanceof org.apache.calcite.rex.RexLiteral){
++            Object value = ((org.apache.calcite.rex.RexLiteral)project).getValue();
++            return value;
++        }
++        else{
++            System.out.println("project type unknown -------" + project.getClass());
++            return null;
++        }
++    }
++
+ }
+diff --git a/in/ac/iitd/src/main/java/rules/PRules.java b/in/ac/iitd/src/main/java/rules/PRules.java
+index 8f94ffe..5cd6f61 100644
+--- a/in/ac/iitd/src/main/java/rules/PRules.java
++++ b/in/ac/iitd/src/main/java/rules/PRules.java
+@@ -2,13 +2,17 @@ package rules;
+ 
+ import org.apache.calcite.plan.Convention;
+ import org.apache.calcite.plan.RelOptRule;
++import org.apache.calcite.plan.RelOptRuleCall;
+ import org.apache.calcite.plan.RelOptTable;
+ import org.apache.calcite.rel.RelNode;
+ import org.apache.calcite.rel.convert.ConverterRule;
+ import org.apache.calcite.rel.core.TableScan;
++import org.apache.calcite.rel.logical.LogicalFilter;
++import org.apache.calcite.rel.logical.LogicalProject;
+ import org.apache.calcite.rel.logical.LogicalTableScan;
+ 
+ import convention.PConvention;
++import rel.PProjectFilter;
+ import rel.PTableScan;
+ 
+ import org.checkerframework.checker.nullness.qual.Nullable;
+@@ -50,10 +54,25 @@ public class PRules {
+     // Write a class PProjectFilterRule that converts a LogicalProject followed by a LogicalFilter to a single PProjectFilter node.
+     
+     // You can make any changes starting here.
+-    public static class PProjectFilterRule {
++    public static class PProjectFilterRule extends RelOptRule {
+ 
+         public static final PProjectFilterRule INSTANCE = new PProjectFilterRule();
++        private PProjectFilterRule() {
++            super(operand(LogicalProject.class, operand(LogicalFilter.class, none())));
++        }
+ 
++        @Override
++        public void onMatch(RelOptRuleCall call) {
++            System.out.println("mmmmmmmmm");
++            final LogicalProject project = call.rel(0);
++            final LogicalFilter filter = call.rel(1);
++          
++            final RelNode inp = filter.getInput();
++            final RelNode pfil= new PProjectFilter(project.getCluster(), project.getTraitSet().replace(PConvention.INSTANCE), inp, filter.getCondition(), project.getProjects(), project.getRowType());
++            
++            call.transformTo(pfil);
++            System.out.println("oyyyyyy");
++        }
+     }
+ 
+ }

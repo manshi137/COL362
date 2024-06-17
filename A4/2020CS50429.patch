@@ -1,0 +1,1201 @@
+diff --git a/in/ac/iitd/src/main/java/MyCalciteConnection.java b/in/ac/iitd/src/main/java/MyCalciteConnection.java
+index 2e869ef..4ef55cc 100644
+--- a/in/ac/iitd/src/main/java/MyCalciteConnection.java
++++ b/in/ac/iitd/src/main/java/MyCalciteConnection.java
+@@ -214,7 +214,41 @@ public class MyCalciteConnection {
+                 Write your code here 
+                 You can post-process the result here, if needed
+             */
+-
++            // scan the query string and find the index of first substring "from" or "FROM"
++            int firstFrom = -1;
++            // convert query to lower case
++            query = query.toLowerCase();
++            for(int i = 0; i < query.length(); i++) {
++                if(i + 4 < query.length() && (query.substring(i, i + 4).equals("from") || query.substring(i, i + 4).equals("FROM"))) {
++                    firstFrom = i;
++                    break;
++                }
++            }
++            // count the number of commas before the first "from" or "FROM"
++            int numCol = 1;
++            for(int i = 0; i < firstFrom; i++) {
++                if(query.charAt(i) == ',') {
++                    numCol++;
++                }
++            }
++            // from result, take only the first numCol columns
++            List<Object[]> newResult = new ArrayList<>();
++            for(Object[] row : result) {
++                Object[] newRow = new Object[numCol];
++                for(int i = 0; i < numCol; i++) {
++                    newRow[i] = row[i];
++                }
++                newResult.add(newRow);
++            }
++            result = newResult;
++            // print result
++            System.out.println("bonus part: ");
++            for(Object[] row : result) {
++                for(Object col : row) {
++                    System.out.print(col + " ");
++                }
++                System.out.println();
++            }
+             return result;
+         }
+         catch (Exception e) {
+diff --git a/in/ac/iitd/src/main/java/rel/PAggregate.java b/in/ac/iitd/src/main/java/rel/PAggregate.java
+index db6dde0..fc2f363 100644
+--- a/in/ac/iitd/src/main/java/rel/PAggregate.java
++++ b/in/ac/iitd/src/main/java/rel/PAggregate.java
+@@ -11,6 +11,9 @@ import org.apache.calcite.util.ImmutableBitSet;
+ import convention.PConvention;
+ 
+ import java.util.List;
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.Map;
+ 
+ // Count, Min, Max, Sum, Avg
+ public class PAggregate extends Aggregate implements PRel {
+@@ -39,18 +42,134 @@ public class PAggregate extends Aggregate implements PRel {
+     }
+ 
+     // returns true if successfully opened, false otherwise
++    int sortindex = -1, aggrindex = -1;
++    int sortlength = 0, aggrlength = 0;
++    List<Object[]> sortedList = new ArrayList<>();
++    List<Object[]> aggregatedList = new ArrayList<>();
+     @Override
+     public boolean open() {
+         logger.trace("Opening PAggregate");
+         /* Write your code here */
++        PRel input = (PRel) getInput();
++        if (input.open()) {
++            sortindex = 0;
++            while(input.hasNext()) {
++                sortedList.add(input.next()); sortlength++;
++            }
++            Aggregate aggregate = (Aggregate)this;
++            ImmutableBitSet groupSet = aggregate.getGroupSet();
++            List<AggregateCall> aggCalls = aggregate.getAggCallList();
++            
++            // multiple aggregate functions 
++            List<List<Object>> tmpAggregatedList = new ArrayList<>();
++            for(int ag=0; ag< aggCalls.size(); ag++){
++                AggregateCall aggCall = aggCalls.get(ag);
++                // System.out.println("Aggregation Function: " + aggCall.getAggregation());
++                // System.out.println("Column Index: " + aggCall.getArgList());
++                
++                Map< List<Object>, List<Object> > groupMap = new HashMap<>();
++                for( Object[] row: sortedList){
++                    List<Object> groupKey = new ArrayList<>();
++                    for( int i = 0; i < groupSet.length(); i++ ) {
++                        groupKey.add(row[groupSet.nth(i)]);
++                    }
++                    if(!groupMap.containsKey(groupKey)){
++                        groupMap.put(groupKey, new ArrayList<>());
++                    }
++                    if(aggCall.getArgList().size()>0){
++                        groupMap.get(groupKey).add(row[aggCall.getArgList().get(0)]);
++                    }
++                    else{
++                        groupMap.get(groupKey).add(null);
++                    }
++                }
++                List<List<Object>> keySet = new ArrayList<>(groupMap.keySet());
++
++                if(ag==0){// add keys in beginning, keep appending aggregate values later
++                    tmpAggregatedList = keySet;
++                }
++
++                for(int k=0; k<keySet.size(); k++){
++                    List<Object> key = keySet.get(k);
++                    List<Object> values = groupMap.get(key);
++
++                    Object aggValue = null;
++                    if(aggCall.getAggregation().getName().equals("COUNT")){
++                        aggValue = values.size();
++                    } else if(aggCall.getAggregation().getName().equals("MIN")){
++                        aggValue = groupMap.get(key).get(0);
++                        for(Object value : values){
++                            if(compare(value, aggValue) < 0){
++                                aggValue = value;
++                            }
++                        }
++                    } else if(aggCall.getAggregation().getName().equals("MAX")){
++                        aggValue = groupMap.get(key).get(0);
++                        for(Object value : values){
++                            if(compare(value, aggValue) > 0){
++                                aggValue = value;
++                            }
++                        }
++                    } else if(aggCall.getAggregation().getName().equals("SUM")){
++                        aggValue = 0;
++                        for(Object value : values){
++                            if(value instanceof Integer){
++                                aggValue = (Integer)aggValue + (Integer)value;
++                            } else if(value instanceof Double){
++                                aggValue = (Double)aggValue + (Double)value;
++                            }
++                        }
++                    } else if(aggCall.getAggregation().getName().equals("AVG")){
++                        aggValue = 0.0;
++                        for(Object value : values){
++                            if(value instanceof Integer){
++                                aggValue = (Double)aggValue + (Integer)value;
++                            } else if(value instanceof Double){
++                                aggValue = (Double)aggValue + (Double)value;
++                            }
++                        }
++                        aggValue = (Double)aggValue / values.size();
++                    }
++                    tmpAggregatedList.get(k).add(aggValue);
++                }
++            }
++            for(List<Object> row: tmpAggregatedList){
++                aggregatedList.add(row.toArray());
++            }
++            aggrindex =0;
++            aggrlength = aggregatedList.size();
++            return true;
++        }
+         return false;
+     }
++    public int compare(Object val1, Object val2){
++        /* Write your code here */
++        if(val1 instanceof Integer){
++            return ((Integer)val1).compareTo((Integer)val2);
++        }
++        if(val1 instanceof Double){
++            return ((Double)val1).compareTo((Double)val2);
++        }
++        if(val1 instanceof String){
++            return ((String)val1).compareTo((String)val2);
++        }
++        if(val1 instanceof Boolean){
++            return ((Boolean)val1).compareTo((Boolean)val2);
++        }
++        if(val1 instanceof Float){
++            return ((Float)val1).compareTo((Float)val2);
++        }
++        System.out.println("Invalid type -------- compare function incomp");
++        return 0;
++    }
+ 
+     // any postprocessing, if needed
+     @Override
+     public void close() {
+         logger.trace("Closing PAggregate");
+         /* Write your code here */
++        PRel input = (PRel) getInput();
++        input.close();
+         return;
+     }
+ 
+@@ -59,6 +178,9 @@ public class PAggregate extends Aggregate implements PRel {
+     public boolean hasNext() {
+         logger.trace("Checking if PAggregate has next");
+         /* Write your code here */
++        if(aggrindex>=0 && aggrindex < aggrlength ){
++            return true;
++        }
+         return false;
+     }
+ 
+@@ -66,6 +188,9 @@ public class PAggregate extends Aggregate implements PRel {
+     @Override
+     public Object[] next() {
+         logger.trace("Getting next row from PAggregate");
++        if(aggrindex>=0 && aggrindex < aggrlength){
++            return aggregatedList.get(aggrindex++);
++        }
+         return null;
+     }
+ 
+diff --git a/in/ac/iitd/src/main/java/rel/PFilter.java b/in/ac/iitd/src/main/java/rel/PFilter.java
+index c3cb696..cfddd15 100644
+--- a/in/ac/iitd/src/main/java/rel/PFilter.java
++++ b/in/ac/iitd/src/main/java/rel/PFilter.java
+@@ -1,5 +1,7 @@
+ package rel;
+ 
++import javax.swing.text.Style;
++
+ import org.apache.calcite.plan.RelOptCluster;
+ import org.apache.calcite.plan.RelTraitSet;
+ import org.apache.calcite.rel.RelNode;
+@@ -8,6 +10,13 @@ import org.apache.calcite.rex.RexNode;
+ 
+ import convention.PConvention;
+ 
++import org.apache.calcite.rex.RexCall;
++import org.apache.calcite.rex.RexLiteral;
++import org.apache.calcite.rex.RexInputRef;
++import org.apache.calcite.sql.SqlKind;
++import org.apache.calcite.util.NlsString;
++
++import java.math.BigDecimal;
+ 
+ public class PFilter extends Filter implements PRel {
+ 
+@@ -31,10 +40,14 @@ public class PFilter extends Filter implements PRel {
+     }
+ 
+     // returns true if successfully opened, false otherwise
+-    @Override
++    @Override 
+     public boolean open(){
+         logger.trace("Opening PFilter");
+         /* Write your code here */
++        PRel child = (PRel)this.getInput();
++        if(child.open()){
++            return true;
++        }
+         return false;
+     }
+ 
+@@ -43,23 +56,334 @@ public class PFilter extends Filter implements PRel {
+     public void close(){
+         logger.trace("Closing PFilter");
+         /* Write your code here */
++        PRel child = (PRel)this.getInput();
++        ((PRel)child).close();
+         return;
+     }
+ 
+     // returns true if there is a next row, false otherwise
++    private Object[] nextoutput = null;
+     @Override
++    
+     public boolean hasNext(){
+         logger.trace("Checking if PFilter has next");
+         /* Write your code here */
++        PRel child = (PRel)this.getInput();
++        Object[] row ;
++        if( ((PRel)child).hasNext()){
++            row = ((PRel)child).next();
++        }
++        else{
++            return false;
++        }
++        RexNode condition = this.getCondition();
++        // System.out.println("condition" + condition);
++       
++        while(row != null ){
++            boolean cond = checkCondition(row, condition);
++            if(cond){
++                nextoutput = row;
++                return true;
++            }
++            if(child.hasNext()){
++                row = ((PRel)child).next();
++            }
++            else{
++                return false;
++            }
++        }
+         return false;
+     }
++    boolean checkCondition(Object[] row, RexNode condition){
++        // if condition is null 
++        if(condition == null){
++            return true;}
++        if( condition instanceof RexCall){
++            RexCall call = (RexCall)condition;
++            SqlKind kind = call.getKind();
++            if(kind == SqlKind.AND){
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if(!checkCondition(row, call.getOperands().get(i))){
++                        return false;
++                    }
++                }
++                return true;
++            }
++            else if(kind == SqlKind.OR){
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if(checkCondition(row, call.getOperands().get(i))){
++                        return true;
++                    }
++                }
++                return false;
++            }
++            else if(kind == SqlKind.NOT){
++                return !checkCondition(row, call.getOperands().get(0));
++            }
++            if(call.getOperands().get(0) instanceof RexInputRef && call.getOperands().get(1) instanceof RexInputRef){
++                int column1 = ((RexInputRef)call.getOperands().get(0)).getIndex();
++                int column2 = ((RexInputRef)call.getOperands().get(1)).getIndex();
++                // return compare(row[column1], row[column2]) <= 0;
++                if(kind == SqlKind.EQUALS){
++                    return compare(row[column1], row[column2]) == 0;
++                }
++                if(kind == SqlKind.GREATER_THAN){
++                    return compare(row[column1], row[column2]) > 0;
++                }
++                if(kind == SqlKind.GREATER_THAN_OR_EQUAL){
++                    return compare(row[column1], row[column2]) >= 0;
++                }
++                if(kind == SqlKind.LESS_THAN){
++                    return compare(row[column1], row[column2]) < 0;
++                }
++                if(kind == SqlKind.LESS_THAN_OR_EQUAL){
++                    return compare(row[column1], row[column2]) <= 0;
++                }
++                if(kind == SqlKind.NOT_EQUALS){
++                    return compare(row[column1], row[column2]) != 0;
++                }
++            } else if (call.getOperands().get(0) instanceof RexInputRef){
++                int column = ((RexInputRef)call.getOperands().get(0)).getIndex();
++                Object value = ((RexLiteral)call.getOperands().get(1)).getValue(); 
++                if(kind == SqlKind.EQUALS){
++                    return compare(row[column], value) == 0;
++                }
++                if(kind == SqlKind.GREATER_THAN){
++                    return compare(row[column], value) > 0;
++                }
++                if(kind == SqlKind.GREATER_THAN_OR_EQUAL){
++                    return compare(row[column], value) >= 0;
++                }
++                if(kind == SqlKind.LESS_THAN){
++                    return compare(row[column], value) < 0;
++                }
++                if(kind == SqlKind.LESS_THAN_OR_EQUAL){
++                    return compare(row[column], value) <= 0;
++                }
++                if(kind == SqlKind.NOT_EQUALS){
++                    return compare(value, row[column]) != 0;
++                }
++            }
++            else if( call.getOperands().get(1) instanceof RexInputRef){
++                int column = ((RexInputRef)call.getOperands().get(1)).getIndex();
++                Object value = ((RexLiteral)call.getOperands().get(0)).getValue(); 
++                if(kind == SqlKind.EQUALS){
++                    return compare(value, row[column]) == 0;
++                }
++                if(kind == SqlKind.GREATER_THAN){
++                    return compare(value, row[column]) > 0;
++                }
++                if(kind == SqlKind.GREATER_THAN_OR_EQUAL){
++                    return compare(value, row[column]) >= 0;
++                }
++                if(kind == SqlKind.LESS_THAN){
++                    return compare(value, row[column]) < 0;
++                }
++                if(kind == SqlKind.LESS_THAN_OR_EQUAL){
++                    return compare(value, row[column]) <= 0;
++                }
++                if(kind == SqlKind.NOT_EQUALS){
++                    return compare(value, row[column]) != 0;
++                }
++            } else if( call.getOperands().get(0) instanceof RexCall || call.getOperands().get(1) instanceof RexCall){
++                Object value1 = calculateRow(call.getOperands().get(0), row);
++                Object value2 = calculateRow(call.getOperands().get(1), row);
++                if(kind == SqlKind.EQUALS){
++                    return compare(value1, value2) == 0;
++                }
++                if(kind == SqlKind.GREATER_THAN){
++                    return compare(value1, value2) > 0;
++                }
++                if(kind == SqlKind.GREATER_THAN_OR_EQUAL){
++                    return compare(value1, value2) >= 0;
++                }
++                if(kind == SqlKind.LESS_THAN){
++                    return compare(value1, value2) < 0;
++                }
++                if(kind == SqlKind.LESS_THAN_OR_EQUAL){
++                    return compare(value1, value2) <= 0;
++                }
++                if(kind == SqlKind.NOT_EQUALS){
++                    return compare(value1, value2) != 0;
++                }
++            }
++            else{ 
++                // System.out.println("type of operands" + call.getOperands().getClass());
++                // System.out.println(call);
++                System.out.println("Invalid type -------- compare function incomp");
++            }
++        
++            
++        }
++        return false;
++    }
++    Object calculateRow(RexNode project, Object[] inputrow){
++        //check if projects is an expression
++        if(project instanceof org.apache.calcite.rex.RexCall){
++            // get operator 
++            org.apache.calcite.rex.RexCall call = (org.apache.calcite.rex.RexCall)project;
++            if(call.getKind() == org.apache.calcite.sql.SqlKind.PLUS){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).add( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.TIMES){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                System.out.println(left.getClass() + " " + right.getClass());
++                return ((BigDecimal)left).multiply( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.MINUS){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).subtract( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.DIVIDE){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).divide( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.EQUALS){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).equals( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.GREATER_THAN){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) > 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.LESS_THAN){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) < 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.GREATER_THAN_OR_EQUAL){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) >= 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.LESS_THAN_OR_EQUAL){
++                // System.out.println("projects is an expression");
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) <= 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.AND){
++                // System.out.println("projects is an expression");
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if(!(boolean)calculateRow(call.getOperands().get(i), inputrow)){
++                        return false;
++                    }
++                }
++                return true;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.OR){
++                // System.out.println("projects is an expression");
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if((boolean)calculateRow(call.getOperands().get(i), inputrow)){
++                        return true;
++                    }
++                }
++                return false;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.NOT){
++                // System.out.println("projects is an expression");
++                return !((boolean)calculateRow(call.getOperands().get(0), inputrow));
++            }
++            else{
++                // System.out.println("projects is an expression");
++                // System.out.println("operator" + call.getKind());
++                return null;
++            }
++        }
++        else if(project instanceof org.apache.calcite.rex.RexInputRef){
++            // System.out.println("projects is an input ref");
++            int index = ((org.apache.calcite.rex.RexInputRef)project).getIndex();
++            if(inputrow[index] instanceof Integer  ){
++                BigDecimal bd = new BigDecimal((int)inputrow[index]);
++                return bd;
++            }
++            else if(inputrow[index] instanceof Double){
++                BigDecimal bd = new BigDecimal((double)inputrow[index]);
++                return bd;
++            }
++            return inputrow[index];
++        }
++        else if(project instanceof org.apache.calcite.rex.RexLiteral){
++            // System.out.println("projects is a literal");
++            Object value = ((org.apache.calcite.rex.RexLiteral)project).getValue();
++            return value;
++        }
++        else{
++            System.out.println("project type unknown -------" + project.getClass());
++            return null;
++        }
++    }
++    public int compare(Object val1, Object val2){
++        /* Write your code here */
++        // System.out.println("compare function");
++        BigDecimal bd1 = null, bd2= null;
++        NlsString ns1 = null, ns2= null;
++        if(val1 instanceof Integer ){
++            bd1 = new BigDecimal((int)val1);
++        }
++        else if(val1 instanceof Double){
++            bd1 = new BigDecimal((double)val1);
++        }
++        else if(val1 instanceof BigDecimal){
++            bd1 = (BigDecimal)val1;
++        }
++
++        if(val2 instanceof Integer){
++            bd2 = new BigDecimal((int)val2);
++        }
++        else if(val2 instanceof Double){
++            bd2 = new BigDecimal((double)val2);
++        }
++        else if(val2 instanceof BigDecimal){
++            bd2 = (BigDecimal)val2;
++        }
++        if(bd1 != null && bd2 != null){
++            return bd1.compareTo(bd2);
++        }
++
++        if(val1 instanceof NlsString){
++            ns1 = (NlsString)val1;
++        }
++        else if(val1 instanceof String){
++            ns1 = new NlsString((String)val1, null, null);
++        }
+ 
++        if(val2 instanceof NlsString){
++            ns2 = (NlsString)val2;
++        }
++        else if(val2 instanceof String){
++            ns2 = new NlsString((String)val2, null, null);
++        }
++
++        if(ns1 != null && ns2 != null){
++            return ns1.compareTo(ns2);
++        }
++        // // // ---------------------------
++        System.out.println("Invalid type -------- compare function incomp");
++        return 0;
++    }
++    
+     // returns the next row
+     // Hint: Try looking at different possible filter conditions
+     @Override
+     public Object[] next(){
+         logger.trace("Getting next row from PFilter");
+         /* Write your code here */
+-        return null;
++        return nextoutput;
+     }
+ }
+diff --git a/in/ac/iitd/src/main/java/rel/PJoin.java b/in/ac/iitd/src/main/java/rel/PJoin.java
+index 9bc33f8..9a8d9d7 100644
+--- a/in/ac/iitd/src/main/java/rel/PJoin.java
++++ b/in/ac/iitd/src/main/java/rel/PJoin.java
+@@ -8,10 +8,16 @@ import org.apache.calcite.rel.core.CorrelationId;
+ import org.apache.calcite.rel.core.Join;
+ import org.apache.calcite.rel.core.JoinRelType;
+ import org.apache.calcite.rex.RexNode;
+-
++import org.apache.calcite.rex.RexCall;
++import org.apache.calcite.rex.RexInputRef;
++import org.apache.calcite.sql.SqlKind;
+ import convention.PConvention;
+ 
++import java.util.List;
++import java.util.ArrayList;
+ import java.util.Set;
++import java.util.Map;
++import java.util.HashMap;
+ 
+ /*
+     * Implement Hash Join
+@@ -48,9 +54,88 @@ public class PJoin extends Join implements PRel {
+     }
+ 
+     // returns true if successfully opened, false otherwise
++    Map<List<Object>, List<Object[]>> hashTable = new HashMap<>();
++    Map<List<Object>, Integer > hashTableVis = new HashMap<>();
++    List<Object[]> joinList = new ArrayList<>();
++    int joinIndex = -1;
++    int joinSize = 0;
++    boolean flag = false; //avoid hasnext two times
++    boolean flagleft = false; //added for left outer join
++
++    // IMPLEMENT HASH JOIN
+     @Override
+     public boolean open() {
+         logger.trace("Opening PJoin");
++        // joinIndex = 0;
++        PRel left = (PRel) getLeft();
++        PRel right = (PRel) getRight();
++        if (left.open()) {
++            // reset map
++            hashTable.clear();
++            hashTableVis.clear();
++            PJoin join = (PJoin)this;
++            RexNode condition = join.getCondition();
++            RexCall call = (RexCall) condition;
++            // multiple join columns
++            List<Integer> leftColumns = new ArrayList<>();
++            List<Integer> rightColumns = new ArrayList<>();
++            if (call.getKind() == SqlKind.AND) {
++                List<RexNode> operands = call.getOperands();
++                for (RexNode operand : operands) {
++                    RexCall callOperand = (RexCall) operand;
++                    RexInputRef leftRefOperand = (RexInputRef) (callOperand.getOperands()).get(0);
++                    RexInputRef rightRefOperand = (RexInputRef) (callOperand.getOperands()).get(1);
++                    leftColumns.add(leftRefOperand.getIndex());
++                    rightColumns.add(rightRefOperand.getIndex() - left.getRowType().getFieldCount());
++                }
++            }
++            else{
++                RexInputRef leftRef = (RexInputRef) (call.getOperands()).get(0);
++                RexInputRef rightRef = (RexInputRef) (call.getOperands()).get(1);
++                leftColumns.add(leftRef.getIndex());
++                rightColumns.add(rightRef.getIndex() - left.getRowType().getFieldCount());
++            }
++            while(left.hasNext()) {
++                Object[] row = left.next();
++                List<Object> key = new ArrayList<>();
++                for (int i = 0; i < leftColumns.size(); i++) {
++                    key.add(row[leftColumns.get(i)]);
++                }
++                if (!hashTable.containsKey(key)) {
++                    hashTable.put(key, new ArrayList<>());
++                }
++                hashTable.get(key).add(row);
++            }
++            right.open();
++            // read one row from right table
++            boolean newRightRow = false;
++            while(!newRightRow && right.hasNext()){
++                Object[] rightrow = right.next();
++                List<Object> key = new ArrayList<>();
++                for (int i = 0; i < rightColumns.size(); i++) {
++                    key.add(rightrow[rightColumns.get(i)]);
++                }
++                if(hashTable.containsKey(key)){
++                    newRightRow = true;
++                    hashTableVis.put(key, 1);
++                    List<Object[]> leftrows = hashTable.get(key);
++                    for(Object[] leftrow: leftrows){
++                        Object[] row = new Object[leftrow.length + rightrow.length];
++                        for(int i = 0; i < leftrow.length; i++){
++                            row[i] = leftrow[i];
++                        }
++                        for(int i = 0; i < rightrow.length; i++){
++                            row[i + leftrow.length] = rightrow[i];
++                        }
++                        joinList.add(row);
++                    }
++                }
++            }
++            joinSize = joinList.size();
++            if(newRightRow){ joinIndex = 0;}
++            return true;
++        }
++
+         /* Write your code here */
+         return false;
+     }
+@@ -59,6 +144,10 @@ public class PJoin extends Join implements PRel {
+     @Override
+     public void close() {
+         logger.trace("Closing PJoin");
++        PRel left = (PRel) getLeft();
++        PRel right = (PRel) getRight();
++        ((PRel) left).close();
++        ((PRel) right).close();
+         /* Write your code here */
+         return;
+     }
+@@ -68,7 +157,119 @@ public class PJoin extends Join implements PRel {
+     public boolean hasNext() {
+         logger.trace("Checking if PJoin has next");
+         /* Write your code here */
+-        return false;
++        PRel left = (PRel) getLeft();
++        PRel right = (PRel) getRight();
++        if(joinIndex>=0 && joinIndex < joinSize){
++            return true;
++        }
++        
++        // fetch new row from right table
++        PJoin join = (PJoin)this;
++        RexNode condition = join.getCondition();
++        RexCall call = (RexCall) condition;
++        
++        List<Integer> leftColumns = new ArrayList<>();
++        List<Integer> rightColumns = new ArrayList<>();
++        if (call.getKind() == SqlKind.AND) { // multiple join columns
++            List<RexNode> operands = call.getOperands();
++            for (RexNode operand : operands) {
++                RexCall callOperand = (RexCall) operand;
++                RexInputRef leftRefOperand = (RexInputRef) (callOperand.getOperands()).get(0);
++                RexInputRef rightRefOperand = (RexInputRef) (callOperand.getOperands()).get(1);
++                leftColumns.add(leftRefOperand.getIndex());
++                rightColumns.add(rightRefOperand.getIndex() - left.getRowType().getFieldCount());
++            }
++        } else{ // single join column
++            RexInputRef leftRef = (RexInputRef) (call.getOperands()).get(0);
++            RexInputRef rightRef = (RexInputRef) (call.getOperands()).get(1);
++            leftColumns.add(leftRef.getIndex());
++            rightColumns.add(rightRef.getIndex() - left.getRowType().getFieldCount());
++        }
++        // get new row from right table
++        boolean newRightRow = false;
++        while(!newRightRow ){
++            if(flag) break;
++            Object[] rightrow;
++            if(right.hasNext()){
++                rightrow = right.next();
++            }
++            else{
++                flag = true;
++                break;
++            }
++            List<Object> key = new ArrayList<>();
++            for (int i = 0; i < rightColumns.size(); i++) {
++                key.add(rightrow[rightColumns.get(i)]);
++            }
++            // print key
++            for (int i = 0; i < key.size(); i++) {
++            }
++            if(hashTable.containsKey(key)){
++                hashTableVis.put(key, 1);
++                newRightRow = true;
++                List<Object[]> leftrows = hashTable.get(key);
++                for(Object[] leftrow: leftrows){
++                    Object[] row = new Object[leftrow.length + rightrow.length];
++                    for(int i = 0; i < leftrow.length; i++){
++                        row[i] = leftrow[i];
++                    }
++                    for(int i = 0; i < rightrow.length; i++){
++                        row[i + leftrow.length] = rightrow[i];
++                    }
++                    joinList.add(row);
++                }
++            }
++            else{
++                // if right join
++                if( join.getJoinType() == JoinRelType.RIGHT || join.getJoinType() == JoinRelType.FULL){
++                    newRightRow = true;
++                    Object[] row = new Object[left.getRowType().getFieldCount() + right.getRowType().getFieldCount()];
++                    for(int i = 0; i < left.getRowType().getFieldCount(); i++){
++                        row[i] = null;
++                    }
++                    for(int i = 0; i < rightrow.length; i++){
++                        row[i + left.getRowType().getFieldCount()] = rightrow[i];
++                    }
++                    joinList.add(row);
++                }
++            }
++            joinSize = joinList.size();
++        }
++        if(newRightRow ){
++            joinSize = joinList.size();
++            return true;
++        }
++        else{//no next row in right table
++            // if left outer join or full outer join
++            if(join.getJoinType() == JoinRelType.LEFT  || join.getJoinType() == JoinRelType.FULL){
++            
++                if(!flagleft){
++                    for(List<Object> key: hashTable.keySet()){
++                        if(hashTableVis.containsKey(key)){ // already visited
++                            continue;
++                        }
++                        List<Object[]> leftrows = hashTable.get(key);
++                        for(Object[] leftrow: leftrows){
++                            Object[] row = new Object[leftrow.length + right.getRowType().getFieldCount()];
++                            for(int i = 0; i < leftrow.length; i++){
++                                row[i] = leftrow[i];
++                            }
++                            for(int i = 0; i < right.getRowType().getFieldCount(); i++){
++                                row[i + leftrow.length] = null;
++                            }
++                            joinList.add(row);
++                        }
++                    }
++                    flagleft = true;
++                }
++                joinSize = joinList.size();
++            }
++            if(joinIndex>= joinSize){
++                return false;
++            }
++            joinSize = joinList.size();
++            return true;
++        }
+     }
+ 
+     // returns the next row
+@@ -76,6 +277,8 @@ public class PJoin extends Join implements PRel {
+     public Object[] next() {
+         logger.trace("Getting next row from PJoin");
+         /* Write your code here */
+-        return null;
++        joinSize = joinList.size();
++        return joinList.get(joinIndex++);
++        // return null;
+     }
+ }
+diff --git a/in/ac/iitd/src/main/java/rel/PProject.java b/in/ac/iitd/src/main/java/rel/PProject.java
+index dc69a91..4ac7230 100644
+--- a/in/ac/iitd/src/main/java/rel/PProject.java
++++ b/in/ac/iitd/src/main/java/rel/PProject.java
+@@ -10,6 +10,7 @@ import org.apache.calcite.rex.RexNode;
+ 
+ import convention.PConvention;
+ 
++import java.math.BigDecimal;
+ import java.util.List;
+ 
+ // Hint: Think about alias and arithmetic operations
+@@ -37,10 +38,15 @@ public class PProject extends Project implements PRel {
+     }
+ 
+     // returns true if successfully opened, false otherwise
++    
+     @Override
+     public boolean open(){
+         logger.trace("Opening PProject");
+         /* Write your code here */
++        PRel input = (PRel)this.getInput();
++        if(((PRel)input).open()){
++            return true;
++        }
+         return false;
+     }
+ 
+@@ -49,6 +55,8 @@ public class PProject extends Project implements PRel {
+     public void close(){
+         logger.trace("Closing PProject");
+         /* Write your code here */
++        PRel input = (PRel)this.getInput();
++        ((PRel)input).close();
+         return;
+     }
+ 
+@@ -57,6 +65,10 @@ public class PProject extends Project implements PRel {
+     public boolean hasNext(){
+         logger.trace("Checking if PProject has next");
+         /* Write your code here */
++        PRel input = (PRel)this.getInput();
++        if(((PRel)input).hasNext()){
++            return true;
++        }
+         return false;
+     }
+ 
+@@ -65,6 +77,118 @@ public class PProject extends Project implements PRel {
+     public Object[] next(){
+         logger.trace("Getting next row from PProject");
+         /* Write your code here */
+-        return null;
++        PRel input = (PRel)this.getInput();
++        PRel pProject = input;
++
++        Object[] inputrow = pProject.next();
++
++        List<RexNode> projects = this.getProjects();
++      
++        Object[] outputrow = new Object[projects.size()];
++        for(int i = 0; i < projects.size(); i++){
++            outputrow[i] = calculateRow(projects.get(i), inputrow);
++        }
++        return outputrow;
++    }
++
++    Object calculateRow(RexNode project, Object[] inputrow){
++        //check if projects is an expression
++        if(project instanceof org.apache.calcite.rex.RexCall){
++            // get operator 
++            org.apache.calcite.rex.RexCall call = (org.apache.calcite.rex.RexCall)project;
++            if(call.getKind() == org.apache.calcite.sql.SqlKind.PLUS){
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).add( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.TIMES){
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).multiply( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.MINUS){
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).subtract( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.DIVIDE){
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).divide( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.EQUALS){
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).equals( (BigDecimal)right);
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.GREATER_THAN){
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) > 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.LESS_THAN){
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) < 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.GREATER_THAN_OR_EQUAL){
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) >= 0;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.LESS_THAN_OR_EQUAL){
++                Object left = calculateRow(call.getOperands().get(0), inputrow);
++                Object right = calculateRow(call.getOperands().get(1), inputrow);
++                return ((BigDecimal)left).compareTo( (BigDecimal)right) <= 0;
++            }
++            // else if(call.getKind() == org.apache.calcite.sql.SqlKind.NOT_EQUALS){
++            //     System.out.println("projects is an expression");
++            //     Object left = calculateRow(call.getOperands().get(0), inputrow);
++            //     Object right = calculateRow(call.getOperands().get(1), inputrow);
++            //     return !((BigDecimal)left).equals( (BigDecimal)right);
++            // }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.AND){
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if(!(boolean)calculateRow(call.getOperands().get(i), inputrow)){
++                        return false;
++                    }
++                }
++                return true;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.OR){
++                for(int i = 0; i < call.getOperands().size(); i++){
++                    if((boolean)calculateRow(call.getOperands().get(i), inputrow)){
++                        return true;
++                    }
++                }
++                return false;
++            }
++            else if(call.getKind() == org.apache.calcite.sql.SqlKind.NOT){
++                return !((boolean)calculateRow(call.getOperands().get(0), inputrow));
++            }
++            else{
++                return null;
++            }
++        }
++        else if(project instanceof org.apache.calcite.rex.RexInputRef){
++            int index = ((org.apache.calcite.rex.RexInputRef)project).getIndex();
++            if(inputrow[index] instanceof Integer  ){
++                BigDecimal bd = new BigDecimal((int)inputrow[index]);
++                return bd;
++            }
++            else if(inputrow[index] instanceof Double){
++                BigDecimal bd = new BigDecimal((double)inputrow[index]);
++                return bd;
++            }
++            return inputrow[index];
++        }
++        else if(project instanceof org.apache.calcite.rex.RexLiteral){
++            Object value = ((org.apache.calcite.rex.RexLiteral)project).getValue();
++            return value;
++        }
++        else{
++            System.out.println("project type unknown -------" + project.getClass());
++            return null;
++        }
+     }
+ }
+diff --git a/in/ac/iitd/src/main/java/rel/PSort.java b/in/ac/iitd/src/main/java/rel/PSort.java
+index f72f7cf..e5489c2 100644
+--- a/in/ac/iitd/src/main/java/rel/PSort.java
++++ b/in/ac/iitd/src/main/java/rel/PSort.java
+@@ -1,6 +1,7 @@
+ package rel;
+ 
+ import java.util.List;
++import java.util.ArrayList;
+ 
+ import org.apache.calcite.plan.RelOptCluster;
+ import org.apache.calcite.plan.RelTraitSet;
+@@ -8,7 +9,10 @@ import org.apache.calcite.rel.RelCollation;
+ import org.apache.calcite.rel.RelNode;
+ import org.apache.calcite.rel.core.Sort;
+ import org.apache.calcite.rel.hint.RelHint;
++import org.apache.calcite.rex.RexLiteral;
+ import org.apache.calcite.rex.RexNode;
++import org.apache.calcite.rel.RelFieldCollation;
++import java.math.BigDecimal;
+ 
+ import convention.PConvention;
+ 
+@@ -38,10 +42,55 @@ public class PSort extends Sort implements PRel{
+     }
+ 
+     // returns true if successfully opened, false otherwise
++    List<Object[]> sortedList = new ArrayList<>();
++    int index = -1;
++    int length = 0;
+     @Override
+     public boolean open(){
+         logger.trace("Opening PSort");
+         /* Write your code here */
++        PRel child = (PRel)this.getInput();
++        if(child.open()){
++            index = 0 ;
++            while(child.hasNext()){
++                sortedList.add(child.next());
++                length ++;
++            }
++            int fetch = -1 ;
++            if(this.fetch != null ){
++                Object fetchvalue = ((RexLiteral)this.fetch).getValue();
++                if (fetchvalue instanceof BigDecimal) {
++                    fetch = ((BigDecimal) fetchvalue).intValue();
++                }
++            }
++            if(fetch!= -1){
++                if(fetch < length){
++                    length = fetch;
++                }
++            }
++            PSort sortNode = (PSort) this;
++            RelCollation collation = sortNode.collation;
++
++            sortedList.sort((o1, o2) -> {
++                for (RelFieldCollation fieldCollation : collation.getFieldCollations()) {
++                    int fieldIndex = fieldCollation.getFieldIndex(); // Column index
++                    RelFieldCollation.Direction direction = fieldCollation.getDirection(); // Sort direction
++                    RelFieldCollation.NullDirection nullDirection = fieldCollation.nullDirection; // Nulls sorting order
++                    // System.out.println("Column Index: " + fieldIndex + ", Direction: " + direction + ", Nulls Direction: " + nullDirection);
++                    if (direction == RelFieldCollation.Direction.ASCENDING) {
++                        if (((Comparable) o1[fieldIndex]).compareTo(o2[fieldIndex]) != 0) {
++                            return ((Comparable) o1[fieldIndex]).compareTo(o2[fieldIndex]);
++                        }
++                    } else {
++                        if (((Comparable) o2[fieldIndex]).compareTo(o1[fieldIndex]) != 0) {
++                            return ((Comparable) o2[fieldIndex]).compareTo(o1[fieldIndex]);
++                        }
++                    }
++                }
++                return 0;
++            });
++            return true;
++        }
+         return false;
+     }
+ 
+@@ -50,6 +99,8 @@ public class PSort extends Sort implements PRel{
+     public void close(){
+         logger.trace("Closing PSort");
+         /* Write your code here */
++        PRel child = (PRel)this.getInput();
++        child.close();
+         return;
+     }
+ 
+@@ -58,6 +109,9 @@ public class PSort extends Sort implements PRel{
+     public boolean hasNext(){
+         logger.trace("Checking if PSort has next");
+         /* Write your code here */
++        if(index < length){
++            return true;
++        }
+         return false;
+     }
+ 
+@@ -66,6 +120,9 @@ public class PSort extends Sort implements PRel{
+     public Object[] next(){
+         logger.trace("Getting next row from PSort");
+         /* Write your code here */
++        if(index < length){
++            return sortedList.get(index++);
++        }
+         return null;
+     }
+ 
+diff --git a/in/ac/iitd/src/main/java/rules/PRules.java b/in/ac/iitd/src/main/java/rules/PRules.java
+index 5d32509..bd3f7e7 100644
+--- a/in/ac/iitd/src/main/java/rules/PRules.java
++++ b/in/ac/iitd/src/main/java/rules/PRules.java
+@@ -9,12 +9,15 @@ import org.apache.calcite.rel.core.TableScan;
+ import org.apache.calcite.rel.logical.LogicalFilter;
+ import org.apache.calcite.rel.logical.LogicalJoin;
+ import org.apache.calcite.rel.logical.LogicalAggregate;
+-import org.apache.calcite.rel.logical.LogicalProject;
++import org.apache.calcite.rel.logical.LogicalProject; 
+ import org.apache.calcite.rel.logical.LogicalTableScan;
+ import org.apache.calcite.rel.logical.LogicalSort;
+ 
+ import convention.PConvention;
+ import rel.PFilter;
++import rel.PJoin;
++import rel.PAggregate;
++import rel.PSort;
+ import rel.PProject;
+ import rel.PTableScan;
+ import org.checkerframework.checker.nullness.qual.Nullable;
+@@ -123,7 +126,17 @@ public class PRules {
+         @Override
+         public @Nullable RelNode convert(RelNode relNode) {
+             /* Write your code here */
+-            return null;
++            final LogicalJoin join = (LogicalJoin) relNode;
++            return new PJoin(
++                join.getCluster(),
++                join.getTraitSet().replace(PConvention.INSTANCE),
++                join.getInputs().get(0),// left, might need convert here also, like for child
++                join.getInputs().get(1), // right,
++                join.getCondition(),
++                join.getVariablesSet(),
++                join.getJoinType()
++            );
++            // return null;
+         }
+     }
+ 
+@@ -141,7 +154,17 @@ public class PRules {
+         @Override
+         public @Nullable RelNode convert(RelNode relNode) {
+             /* Write your code here */
+-            return null;
++            final LogicalAggregate aggregate = (LogicalAggregate) relNode;
++            return new PAggregate(
++                    aggregate.getCluster(),
++                    aggregate.getTraitSet().replace(PConvention.INSTANCE),
++                    aggregate.getHints(), // hints
++                    convert(aggregate.getInput(), aggregate.getInput().getTraitSet().replace(PConvention.INSTANCE)), 
++                    aggregate.getGroupSet(), //group set
++                    aggregate.groupSets , // group sets
++                    aggregate.getAggCallList()
++            );
++            // return null;
+         }
+     }
+ 
+@@ -159,7 +182,17 @@ public class PRules {
+         @Override
+         public @Nullable RelNode convert(RelNode relNode) {
+             /* Write your code here */
+-            return null;
++            final LogicalSort sort = (LogicalSort) relNode;
++            return new PSort(
++                    sort.getCluster(),
++                    sort.getTraitSet().replace(PConvention.INSTANCE),
++                    sort.getHints(), // hints
++                    convert(sort.getInput(), sort.getInput().getTraitSet().replace(PConvention.INSTANCE)), //child 
++                    sort.getCollation(), // collation
++                    sort.offset,// offset ????
++                    sort.fetch
++            );
++            // return null;
+         }
+     }
+ }
