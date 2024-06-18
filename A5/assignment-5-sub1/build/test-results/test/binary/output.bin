@@ -1,15 +1,0 @@
-[+] Logical RelNode:
-3LogicalProject(FIRST_NAME=[$1], EXPR$1=[*($0, 1)])
-U  LogicalFilter(condition=[OR(=(*($0, 2), *(100, 2)), AND(=($0, 150), =($0, 200)))])
-)    PTableScan(table=[[FILM_DB, actor]])
-
-
-mmmmmmmmm
-oyyyyyy
-[+] Physical RelNode:
-3PProjectFilter(FIRST_NAME=[$1], EXPR$1=[*($0, 1)])
-'  PTableScan(table=[[FILM_DB, actor]])
-
-RESULT-------
-Spencer 100 
-Test passed :)
